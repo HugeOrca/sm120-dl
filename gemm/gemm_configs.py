@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Generate conservative gemm_tn configurations as a CMake include file."""
+
+import argparse
+import os
+
+
+TYPE_CONFIGS = (
+    ("bf16", "bf16"),
+)
+
+BM_VALUES = (64, 128) #(, 192)
+BN_VALUES = (64, 128) #(, 192)
+BK_VALUES = (64, )
+STAGE_VALUES = (2, 3)
+CWG_VALUES   = (2, 4)
+BS_W_VALUES  = (4, 8) # 16
+
+WARP_SIZE = 32
+ELEMENT_BYTES = 2
+MAX_TILE_ELEMENTS = 16384
+MAX_ACCUM_ELEMENTS_PER_THREAD = 64
+MAX_THREADS_PER_BLOCK = 1024
+
+def is_pow2(warps_n) :
+    return (warps_n & (warps_n - 1)) == 0
+
+def smem_bytes(bm, bn, bk, stage, element_bytes=ELEMENT_BYTES):
+    tile_bytes = stage * (bm * bk + bn * bk) * element_bytes
+    c_bytes = bm * bn * element_bytes
+    barrier_bytes = 2 * stage * 8
+    return tile_bytes + c_bytes + barrier_bytes
+
+
+def legal_warp_shapes(bm, bn, cwg):
+    total_consumer_warps = 4 * cwg
+    for warps_m in range(1, total_consumer_warps + 1):
+        if total_consumer_warps % warps_m != 0:
+            continue
+        warps_n = total_consumer_warps // warps_m
+
+        # gemm_tn requires these divisibility checks.  The stricter atom checks
+        # keep every warp partition large enough for 16x8x16 MMA atoms.
+        if bm % warps_m != 0 or bn % warps_n != 0:
+            continue
+        if not is_pow2(warps_n) :
+            continue
+        if bm % (16 * warps_m) != 0:
+            continue
+        if bn % (8 * warps_n) != 0:
+            continue
+        yield warps_m, warps_n
+
+
+def config_name(type_name, bm, bn, bk, stage, cwg, warps_m, warps_n, bs_w):
+    return (
+        f"{type_name}_bm{bm}_bn{bn}_bk{bk}_s{stage}_cwg{cwg}"
+        f"_wm{warps_m}_wn{warps_n}_bsw{bs_w}"
+    )
+
+
+def is_valid_config(bm, bn, bk, stage, cwg, warps_m, warps_n, bs_w, max_smem):
+    # Constraints mirrored from gemm_tn and b16_gemm_kernel.
+    if bm <= 0 or bn <= 0 or bk <= 0:
+        return False
+    if stage <= 0 or cwg <= 0:
+        return False
+    if warps_m <= 0 or warps_n <= 0 or bs_w <= 0:
+        return False
+    if bm % 32 != 0 or bn % 64 != 0 or bk % 64 != 0:
+        return False
+    if warps_m * warps_n != 4 * cwg:
+        return False
+    if bm % warps_m != 0 or bn % warps_n != 0:
+        return False
+    if bm % (16 * warps_m) != 0 or bn % (8 * warps_n) != 0:
+        return False
+    if (4 * cwg + 4) * WARP_SIZE > MAX_THREADS_PER_BLOCK:
+        return False
+    if bm * bn > MAX_TILE_ELEMENTS:
+        return False
+    accum_per_thread = (bm * bn) // (4 * cwg * WARP_SIZE)
+    if accum_per_thread > MAX_ACCUM_ELEMENTS_PER_THREAD:
+        return False
+    if smem_bytes(bm, bn, bk, stage) > max_smem:
+        return False
+    return True
+
+
+def generate_configs(max_smem_kb):
+    max_smem = max_smem_kb * 1024
+    configs = []
+    for type_name, type_cpp in TYPE_CONFIGS:
+        for bm in BM_VALUES:
+            for bn in BN_VALUES:
+                for bk in BK_VALUES:
+                    for stage in STAGE_VALUES:
+                        for cwg in CWG_VALUES:
+                            for warps_m, warps_n in legal_warp_shapes(bm, bn, cwg):
+                                for bs_w in BS_W_VALUES:
+                                    if not is_valid_config(
+                                        bm, bn, bk, stage, cwg, warps_m, warps_n, bs_w, max_smem
+                                    ):
+                                        continue
+                                    name = config_name(
+                                        type_name, bm, bn, bk, stage, cwg, warps_m, warps_n, bs_w
+                                    )
+                                    configs.append(
+                                        (
+                                            type_name,
+                                            type_cpp,
+                                            bm,
+                                            bn,
+                                            bk,
+                                            stage,
+                                            cwg,
+                                            warps_m,
+                                            warps_n,
+                                            bs_w,
+                                            name,
+                                        )
+                                    )
+    return configs
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", required=True, help="Output .cmake file path")
+    parser.add_argument("--max-smem-kb", type=int, default=96)
+    args = parser.parse_args()
+
+    configs = generate_configs(args.max_smem_kb)
+    if not configs:
+        raise RuntimeError("no valid gemm_tn configs generated")
+
+    default_name = "bf16_bm64_bn64_bk64_s3_cwg2_wm4_wn2_bsw4"
+    default_config = next((cfg for cfg in configs if cfg[-1] == default_name), configs[0])
+
+    output_dir = os.path.dirname(args.output)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    with open(args.output, "w", encoding="utf-8") as f:
+        f.write("# Auto-generated by gemm/gemm_configs.py - do not edit\n")
+        f.write(f"# {len(configs)} configs, max dynamic shared memory {args.max_smem_kb} KiB\n\n")
+        f.write(f"set(GEMM_TN_MAX_SMEM_BYTES {args.max_smem_kb * 1024})\n")
+        f.write("set(GEMM_TN_CONFIGS\n")
+        for cfg in configs:
+            f.write(f'    "{"|".join(str(x) for x in cfg)}"\n')
+        f.write(")\n")
+        f.write(f'set(GEMM_TN_DEFAULT_CONFIG "{"|".join(str(x) for x in default_config)}")\n')
+
+    print(f"Generated {len(configs)} configs -> {args.output}")
+
+
+if __name__ == "__main__":
+    main()

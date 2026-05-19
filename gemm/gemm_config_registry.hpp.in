@@ -1,0 +1,34 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+
+#include "gemm_cute.hpp"
+
+struct GemmConfig {
+    using RunFn = void (*)(
+        int M,
+        int N,
+        int K,
+        const bf16* A,
+        const bf16* B,
+        bf16* C,
+        cudaStream_t stream);
+
+    const char* name;
+    int bm;
+    int bn;
+    int bk;
+    int stage;
+    int cwg;
+    int warps_m;
+    int warps_n;
+    int bs_w;
+    int smem_bytes;
+    RunFn run;
+};
+
+@GENERATED_CONFIG_DECLS@
+
+extern const GemmConfig kGemmConfigs[];
+extern const std::size_t kGemmConfigCount;

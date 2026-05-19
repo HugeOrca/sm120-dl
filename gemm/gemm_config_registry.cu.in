@@ -1,0 +1,7 @@
+#include "gemm_config_registry.hpp"
+
+const GemmConfig kGemmConfigs[] = {
+@GENERATED_CONFIG_ENTRIES@
+};
+
+const std::size_t kGemmConfigCount = sizeof(kGemmConfigs) / sizeof(kGemmConfigs[0]);

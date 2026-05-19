@@ -1,0 +1,64 @@
+// Auto-generated gemm_tn instantiation. Configured from gemm/gemm.cu.in.
+
+#include <cstdint>
+#include <type_traits>
+
+#include "gemm_cute.hpp"
+
+using Element = @TYPE_CPP@;
+
+static constexpr int BM = @BM@;
+static constexpr int BN = @BN@;
+static constexpr int BK = @BK@;
+static constexpr int STAGE = @STAGE@;
+static constexpr int CWG = @CWG@;
+static constexpr int WARPS_M = @WARPS_M@;
+static constexpr int WARPS_N = @WARPS_N@;
+static constexpr int BS_W = @BS_W@;
+static constexpr int WARP_SIZE = 32;
+static constexpr int MAX_THREADS_PER_BLOCK = 1024;
+static constexpr int MAX_TILE_ELEMENTS = 16384;
+static constexpr int MAX_ACCUM_ELEMENTS_PER_THREAD = 64;
+static constexpr int MAX_DYNAMIC_SMEM_BYTES = @GEMM_TN_MAX_SMEM_BYTES@;
+static constexpr int ELEMENT_BYTES = sizeof(Element);
+static constexpr int SMEM_BYTES =
+    STAGE * (BM * BK + BN * BK) * ELEMENT_BYTES +
+    BM * BN * ELEMENT_BYTES +
+    2 * STAGE * static_cast<int>(sizeof(uint64_t));
+
+static_assert(std::is_same_v<Element, bf16> || std::is_same_v<Element, cutlass::half_t>,
+              "Configured T must be bf16 or cutlass::half_t.");
+static_assert(sizeof(Element) == 2, "gemm_tn expects a 16-bit element type.");
+static_assert(BM > 0 && BN > 0 && BK > 0, "BM, BN, and BK must be positive.");
+static_assert(STAGE > 0, "STAGE must be positive.");
+static_assert(WARPS_M > 0 && WARPS_N > 0, "WARPS_M and WARPS_N must be positive.");
+static_assert(BS_W > 0, "BS_W must be positive.");
+static_assert(STAGE == 1 || STAGE == 2 || STAGE == 3 || STAGE == 4,
+              "STAGE must come from the generated conservative range.");
+static_assert(CWG == 1 || CWG == 2 || CWG == 3 || CWG == 4, "CWG must come from the generated conservative range.");
+static_assert(BM % 32 == 0 && BN % 64 == 0 && BK % 64 == 0,
+              "gemm_tn requires BM, BN, and BK to be divisible by 32.");
+static_assert(WARPS_M * WARPS_N == 4 * CWG,
+              "WARPS_M * WARPS_N must equal the number of consumer warps.");
+static_assert(BM % (16 * WARPS_M) == 0 && BN % (8 * WARPS_N) == 0,
+              "Every warp partition must contain a ldmatrix-compatible MMA tile.");
+static_assert((4 * CWG + 4) * WARP_SIZE <= MAX_THREADS_PER_BLOCK,
+              "Configured block exceeds the conservative thread limit.");
+static_assert(BM * BN <= MAX_TILE_ELEMENTS,
+              "Output tile is outside the conservative register-allocation range.");
+static_assert((BM * BN) / (4 * CWG * WARP_SIZE) <= MAX_ACCUM_ELEMENTS_PER_THREAD,
+             "Accumulator footprint per consumer thread is too large.");
+static_assert(SMEM_BYTES <= MAX_DYNAMIC_SMEM_BYTES,
+              "Configured shared memory exceeds the generated limit.");
+static_assert(BK % 64 == 0, "The generated config space keeps BK at 64 for SW128 TMA tiles.");
+static_assert(BS_W == 1 || BS_W == 2 || BS_W == 4 || BS_W == 8 || BS_W == 16,
+              "BS_W must come from the generated conservative swizzle range.");
+
+template void gemm_tn<Element, BM, BN, BK, STAGE, CWG, WARPS_M, WARPS_N, BS_W>(
+    int M,
+    int N,
+    int K,
+    const Element* A,
+    const Element* B,
+    Element* C,
+    cudaStream_t stream);
