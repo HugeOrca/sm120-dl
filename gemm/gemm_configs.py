@@ -14,7 +14,7 @@ BN_VALUES = (64, 128) #(, 192)
 BK_VALUES = (64, )
 STAGE_VALUES = (2, 3)
 CWG_VALUES   = (2, 4)
-BS_W_VALUES  = (4, 8) # 16
+BS_W_VALUES  = (4, 8)
 
 WARP_SIZE = 32
 ELEMENT_BYTES = 2
@@ -126,7 +126,7 @@ def generate_configs(max_smem_kb):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True, help="Output .cmake file path")
-    parser.add_argument("--max-smem-kb", type=int, default=96)
+    parser.add_argument("--max-smem-kb", type=int, default=100)
     args = parser.parse_args()
 
     configs = generate_configs(args.max_smem_kb)

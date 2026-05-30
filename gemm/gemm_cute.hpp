@@ -76,7 +76,7 @@ template <typename T, typename SStorage, int BM, int BN, int BK, int STAGE, int 
          class TmaA, class TmaB, class TmaC,
          int WARP_SIZE=32>
 __global__ void
-__launch_bounds__((CWG*4+4)*WARP_SIZE)
+__launch_bounds__((CWG*4+4)*WARP_SIZE, 1)
     b16_gemm(
     Shape shape,
     TensorA mA, TensorB mB, TensorC mC,

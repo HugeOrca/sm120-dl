@@ -20,7 +20,7 @@ set(UTILS_TOOLS_HEADER "${REPO_ROOT}/utils/tools.h")
 # Generate conservative gemm_tn configurations and instantiate all of them
 # for the verification target.
 set(GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
-set(GEMM_TN_MAX_SMEM_KB 96 CACHE STRING "Max dynamic shared memory in KiB for generated gemm_tn configs")
+set(GEMM_TN_MAX_SMEM_KB 100 CACHE STRING "Max dynamic shared memory in KiB for generated gemm_tn configs")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${GEMM_SOURCE_DIR}/gemm_configs.py"
 )
@@ -181,7 +181,7 @@ target_link_libraries(test_gemm_cute PRIVATE
 # Configurable CMake cache parameters:
 #   -DGEMM_TN_MAX_SMEM_KB=<KiB>
 #     Max dynamic shared memory in KiB passed to gemm_configs.py.
-#     Default: 96
+#     Default: 100
 #
 #   -DGEMM_TN_ONLY_CONFIG=<config-name>
 #     Instantiate only one generated gemm_tn config. Empty string builds all
