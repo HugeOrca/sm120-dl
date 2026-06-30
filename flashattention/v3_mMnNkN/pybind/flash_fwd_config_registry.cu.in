@@ -1,0 +1,8 @@
+#include "flash_fwd_config_registry.hpp"
+
+const FlashFwdConfig kFlashFwdConfigs[] = {
+@GENERATED_CONFIG_TABLE@
+};
+
+const std::size_t kFlashFwdConfigCount = sizeof(kFlashFwdConfigs) / sizeof(kFlashFwdConfigs[0]);
+const char* kFlashFwdDefaultConfigName = "@DEFAULT_CONFIG_NAME@";

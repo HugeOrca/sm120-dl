@@ -1,0 +1,90 @@
+#include <cmath>
+
+#include <cuda_runtime.h>
+#include <torch/extension.h>
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>
+
+#include <cutlass/numeric_types.h>
+
+#include "flashatten_v3.hpp"
+#include "flash_fwd_config_registry.hpp"
+
+namespace {
+
+constexpr int kHeadDim = @HEAD_DIM@;
+constexpr int kBlockM = @BM@;
+constexpr int kBlockN = @BN@;
+constexpr int kNWarps = @NWARPS@;
+constexpr int kStage = @STAGE@;
+
+template <bool Causal, int HeadNum>
+torch::Tensor run_fixed_shape(const torch::Tensor& q, const torch::Tensor& k, const torch::Tensor& v) {
+    auto out = torch::empty_like(q);
+    const int batch = static_cast<int>(q.size(0));
+    const int seq_len = static_cast<int>(q.size(1));
+    const float scale = 1.0f / std::sqrt(static_cast<float>(kHeadDim));
+
+    c10::cuda::CUDAGuard device_guard(q.device());
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream(q.get_device()).stream();
+
+    flash_fwd<cutlass::half_t, Causal,
+              HeadNum, kHeadDim,
+              kBlockM, kBlockN, kNWarps, kStage>(
+        scale,
+        seq_len,
+        batch,
+        reinterpret_cast<const cutlass::half_t*>(q.data_ptr<at::Half>()),
+        reinterpret_cast<const cutlass::half_t*>(k.data_ptr<at::Half>()),
+        reinterpret_cast<const cutlass::half_t*>(v.data_ptr<at::Half>()),
+        reinterpret_cast<cutlass::half_t*>(out.data_ptr<at::Half>()),
+        stream);
+
+    cudaError_t status = cudaGetLastError();
+    TORCH_CHECK(status == cudaSuccess, "flashatten_v3 kernel launch failed: ", cudaGetErrorString(status));
+    return out;
+}
+
+template <int HeadNum>
+torch::Tensor run_fixed_shape_causal(bool causal, const torch::Tensor& q, const torch::Tensor& k, const torch::Tensor& v) {
+    if (causal) {
+        return run_fixed_shape<true, HeadNum>(q, k, v);
+    }
+    return run_fixed_shape<false, HeadNum>(q, k, v);
+}
+
+}
+
+torch::Tensor run_flash_fwd_@CFG_SYMBOL@(const torch::Tensor& q, const torch::Tensor& k, const torch::Tensor& v, bool causal) {
+    const int64_t head_num = q.size(2);
+    const int64_t head_dim = q.size(3);
+
+    if (head_dim != kHeadDim) {
+        TORCH_CHECK(false, "@CFG_SYMBOL@ expects head_dim=", kHeadDim, ", got ", head_dim);
+    }
+    if (head_num == 1) {
+        return run_fixed_shape_causal<1>(causal, q, k, v);
+    }
+    if (head_num == 4) {
+        return run_fixed_shape_causal<4>(causal, q, k, v);
+    }
+    if (head_num == 8) {
+        return run_fixed_shape_causal<8>(causal, q, k, v);
+    }
+    if (head_num == 16) {
+        return run_fixed_shape_causal<16>(causal, q, k, v);
+    }
+    if (head_num == 32) {
+        return run_fixed_shape_causal<32>(causal, q, k, v);
+    }
+    if (head_num == 64) {
+        return run_fixed_shape_causal<64>(causal, q, k, v);
+    }
+    if (head_num == 80) {
+        return run_fixed_shape_causal<80>(causal, q, k, v);
+    }
+
+    TORCH_CHECK(false,
+                "unsupported head_num=", head_num,
+                " for @CFG_SYMBOL@");
+}

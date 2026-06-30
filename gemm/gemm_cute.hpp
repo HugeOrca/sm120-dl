@@ -16,6 +16,7 @@
 #include "cutlass/pipeline/sm90_pipeline.hpp"
 
 #include "cutlass/arch/mma_sm90.h"
+#include "cutlass/arch/reg_reconfig.h"
 #include "cutlass/device_kernel.h"
 #include "cutlass/numeric_conversion.h"
 
@@ -51,24 +52,6 @@ struct SharedStorage {
     }
 };
 
-
-dv_flag bool producer() {
-    return (threadIdx.y < 4);
-}
-
-template<int BS_W>
-dv_flag
-void block_swizzle(int tiled_id, int& bm, int& bn, int BM, int BN) {
-    int SW = BS_W < BN ? BS_W : BN;
-    int square = SW*BM;
-    int num    = tiled_id / square;
-    int base_col = num*SW;
-    int SW2 = (base_col+SW) < BN ? SW : BN-base_col;
-    int in_square = tiled_id%(SW2*BM);
-    bm = in_square / SW2;
-    bn = base_col + in_square % SW2;
-}
-
 /*grid:(SMs) block:(32, CWG*4+4)*/
 template <typename T, typename SStorage, int BM, int BN, int BK, int STAGE, int CWG,
          int WARPS_M, int WARPS_N, int BS_W,
@@ -103,6 +86,8 @@ __launch_bounds__((CWG*4+4)*WARP_SIZE, 1)
     int K_NUM = K/BK;
     int tiles_num = M_NUM * N_NUM;
     constexpr int Consumer = CWG<<2;
+    constexpr int kProducerRegCount = 40;
+    constexpr int kConsumerRegCount = get_consumer_registers<Consumer, kProducerRegCount>();
     constexpr auto cta_tiler = make_shape(Int<BM>{}, Int<BN>{}, Int<BK>{});
 
     extern __shared__ uint8_t smem_array[];
@@ -126,7 +111,8 @@ __launch_bounds__((CWG*4+4)*WARP_SIZE, 1)
     auto write_state = cutlass::PipelineState<STAGE>();
     auto read_state  = cutlass::PipelineState<STAGE>();
 
-    if(producer()) {
+    if(producer<4>()) {
+        cutlass::arch::warpgroup_reg_dealloc<kProducerRegCount>();
         if(threadIdx.y==0 && threadIdx.x==0) {
             int total_k=0;
             for(int tiled_id=blockIdx.x; tiled_id<tiles_num; tiled_id += gridDim.x) {
@@ -156,6 +142,7 @@ __launch_bounds__((CWG*4+4)*WARP_SIZE, 1)
         }
     }
     else {
+        cutlass::arch::warpgroup_reg_alloc<kConsumerRegCount>();
         Copy_Atom<SM75_U32x4_LDSM_N, T> s2r_atom_a;
         Copy_Atom<SM75_U32x2_LDSM_N, T> s2r_atom_b;
         Copy_Atom<SM90_U32x2_STSM_N, T> r2s_atom_c;

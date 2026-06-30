@@ -1,0 +1,28 @@
+#pragma once
+
+#include <cstddef>
+
+#include <torch/extension.h>
+
+struct FlashFwdConfig {
+    using RunFn = torch::Tensor (*)(
+        const torch::Tensor& q,
+        const torch::Tensor& k,
+        const torch::Tensor& v,
+        bool causal);
+
+    const char* name;
+    int head_dim;
+    int block_m;
+    int block_n;
+    int nwarps;
+    int stage;
+    int smem_bytes;
+    RunFn run;
+};
+
+@GENERATED_CONFIG_DECLS@
+
+extern const FlashFwdConfig kFlashFwdConfigs[];
+extern const std::size_t kFlashFwdConfigCount;
+extern const char* kFlashFwdDefaultConfigName;
