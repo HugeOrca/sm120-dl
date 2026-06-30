@@ -381,3 +381,10 @@ carry a short SPDX header. The full upstream copyright notices and BSD 3-Clause
 license texts are reproduced in [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
 Original modifications in this project are licensed under Apache-2.0; see the
 repository `LICENSE` file.
+
+## License
+
+This project's own code is licensed under Apache-2.0 (see the repository
+`LICENSE` file). It builds on third-party components (FlashAttention and NVIDIA
+CUTLASS / CuTe) under the BSD 3-Clause License; their copyright notices and full
+license texts are in [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).

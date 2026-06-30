@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Built on NVIDIA CUTLASS / CuTe (BSD-3-Clause). See gemm/readme.md
+// "Acknowledgements" and gemm/THIRD_PARTY_LICENSES.md for third-party notices.
 // Auto-generated gemm_tn instantiation. Configured from gemm/gemm.cu.in.
 
 #include <cstdint>
@@ -30,14 +33,14 @@ static_assert(std::is_same_v<Element, bf16> || std::is_same_v<Element, cutlass::
               "Configured T must be bf16 or cutlass::half_t.");
 static_assert(sizeof(Element) == 2, "gemm_tn expects a 16-bit element type.");
 static_assert(BM > 0 && BN > 0 && BK > 0, "BM, BN, and BK must be positive.");
-static_assert(STAGE > 0, "STAGE must be positive.");
+static_assert(STAGE == 2 || STAGE == 3, "STAGE must be 2 or 3.");
 static_assert(WARPS_M > 0 && WARPS_N > 0, "WARPS_M and WARPS_N must be positive.");
 static_assert(BS_W > 0, "BS_W must be positive.");
-static_assert(STAGE == 1 || STAGE == 2 || STAGE == 3 || STAGE == 4,
+static_assert(STAGE == 2 || STAGE == 3,
               "STAGE must come from the generated conservative range.");
 static_assert(CWG == 1 || CWG == 2 || CWG == 3 || CWG == 4, "CWG must come from the generated conservative range.");
 static_assert(BM % 32 == 0 && BN % 64 == 0 && BK % 64 == 0,
-              "gemm_tn requires BM, BN, and BK to be divisible by 32.");
+              "gemm_tn requires BM divisible by 32 and BN, BK divisible by 64.");
 static_assert(WARPS_M * WARPS_N == 4 * CWG,
               "WARPS_M * WARPS_N must equal the number of consumer warps.");
 static_assert(BM % (16 * WARPS_M) == 0 && BN % (8 * WARPS_N) == 0,
@@ -50,7 +53,6 @@ static_assert((BM * BN) / (4 * CWG * WARP_SIZE) <= MAX_ACCUM_ELEMENTS_PER_THREAD
              "Accumulator footprint per consumer thread is too large.");
 static_assert(SMEM_BYTES <= MAX_DYNAMIC_SMEM_BYTES,
               "Configured shared memory exceeds the generated limit.");
-static_assert(BK % 64 == 0, "The generated config space keeps BK at 64 for SW128 TMA tiles.");
 static_assert(BS_W == 1 || BS_W == 2 || BS_W == 4 || BS_W == 8 || BS_W == 16,
               "BS_W must come from the generated conservative swizzle range.");
 

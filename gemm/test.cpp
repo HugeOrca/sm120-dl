@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Built on NVIDIA CUTLASS / CuTe (BSD-3-Clause). See gemm/readme.md
+// "Acknowledgements" and gemm/THIRD_PARTY_LICENSES.md for third-party notices.
 #include <algorithm>
 #include <cerrno>
 #include <climits>
@@ -12,6 +15,7 @@
 #include <vector>
 
 #include <cublas_v2.h>
+#include <cuda_profiler_api.h>
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 #include <unistd.h>
@@ -32,6 +36,16 @@ struct GemmShape {
 };
 
 constexpr GemmShape kTestShapes[] = {
+    // {1024, 1024, 1024},
+    // {2048, 2048, 2048},
+    // {4096, 4096, 4096},
+    // {8192, 8192, 8192},
+    // {3456, 4096, 4096},
+    // {4096, 7168, 2048},
+    // {4096, 4096, 7168},
+    // {4096, 7168, 16384},
+    // {4096, 24576, 1536},
+    // {4096, 32768, 512},
     {128, 4096, 14336},
     {128, 28672, 4096},
     {512, 512, 14336},
@@ -42,6 +56,8 @@ constexpr GemmShape kTestShapes[] = {
     {4096, 4096, 14336},
     {4096, 28672, 4096},
     {8192, 8192, 8192},
+    {16384, 16384, 16384},
+    {40960, 40960, 4096},
 };
 
 const char* cublas_status_to_string(cublasStatus_t status) {
@@ -510,7 +526,9 @@ void print_available_configs() {
 void print_usage(const char* program) {
     std::fprintf(
         stderr,
-        "usage: %s --verify|--benchmark|m n k|--func <gemm_tn_config_name> [--verify|--benchmark]\n",
+        "usage: %s --verify|--benchmark|--benchmark m n k|m n k"
+        "|--func <gemm_tn_config_name> [--verify|--benchmark]"
+        "|--profile <gemm_tn_config_name> m n k [warmup]\n",
         program);
 }
 
@@ -1113,6 +1131,88 @@ int run_func(std::string_view query, FuncMode mode) {
     return verify_ok && benchmark_ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
+// Launch one config on one shape with a single kernel launch fenced inside a
+// cudaProfilerStart/Stop region (after warmup launches), then exit. This
+// isolates exactly one launch for Nsight Compute via `--profile-from-start off
+// -c 1`, mirroring flashattention/v3_mMnNkN/test_compute_rate.py.
+template <class T>
+int run_profile(std::string_view query, const GemmShape& shape, int warmup) {
+    const GemmConfig* config = find_config(query);
+    if (config == nullptr) {
+        print_available_configs();
+        return EXIT_FAILURE;
+    }
+    if (!config_supports_problem(*config, shape.M, shape.N, shape.K)) {
+        print_config_skipped("profile", *config, shape.M, shape.N, shape.K);
+        return EXIT_FAILURE;
+    }
+
+    std::printf(
+        "profile config=%s M=%d N=%d K=%d warmup=%d\n",
+        config->name,
+        shape.M,
+        shape.N,
+        shape.K,
+        warmup);
+
+    GemmProblem<T> problem(shape.M, shape.N, shape.K);
+    cudaStream_t stream = nullptr;
+    if (!check_cuda(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking),
+                    "cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking)",
+                    __FILE__,
+                    __LINE__)) {
+        return EXIT_FAILURE;
+    }
+
+    auto launch = [&]() {
+        config->run(
+            shape.M,
+            shape.N,
+            shape.K,
+            problem.device_A.data().get(),
+            problem.device_B.data().get(),
+            problem.device_C.data().get(),
+            stream);
+        return check_cuda(cudaGetLastError(), config->name, __FILE__, __LINE__);
+    };
+
+    bool ok = true;
+    for (int i = 0; i < warmup && ok; ++i) {
+        ok = launch();
+    }
+    ok = ok && check_cuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize()", __FILE__, __LINE__);
+
+    if (ok) {
+        cudaProfilerStart();
+        ok = launch();
+        ok = ok && check_cuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize()", __FILE__, __LINE__);
+        cudaProfilerStop();
+    }
+
+    check_cuda(cudaStreamDestroy(stream), "cudaStreamDestroy(stream)", __FILE__, __LINE__);
+    return ok ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
+// Benchmark every config on one shape and print the best, skipping the CPU-side
+// verification. Useful for large shapes where the host reference compare would
+// dominate runtime (e.g. 16384^3).
+template <class T>
+int run_shape_benchmark(const GemmShape& shape) {
+    BenchmarkShapeResult benchmark_result = benchmark_all_configs_for_shape<T>(shape);
+    if (benchmark_result.best.config != nullptr) {
+        print_benchmark_best(
+            benchmark_result.best.shape,
+            *benchmark_result.best.config,
+            benchmark_result.best.result,
+            benchmark_result.best.cublas_latency_ms,
+            benchmark_result.best.cublas_throughput);
+    }
+    return benchmark_result.ok && benchmark_result.failed == 0 &&
+                   benchmark_result.best.config != nullptr
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+}
+
 template <class T>
 int run_shape_test(const GemmShape& shape) {
     cublasHandle_t handle = nullptr;
@@ -1148,6 +1248,16 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::strcmp(argv[1], "--benchmark") == 0) {
         return run_benchmark<T>(argv[0]);
     }
+    if (argc == 5 && std::strcmp(argv[1], "--benchmark") == 0) {
+        GemmShape shape{};
+        if (!parse_positive_int_arg(argv[2], shape.M) ||
+            !parse_positive_int_arg(argv[3], shape.N) ||
+            !parse_positive_int_arg(argv[4], shape.K)) {
+            print_usage(argv[0]);
+            return EXIT_FAILURE;
+        }
+        return run_shape_benchmark<T>(shape);
+    }
     if ((argc == 3 || argc == 4) && std::strcmp(argv[1], "--func") == 0) {
         FuncMode mode = FuncMode::VerifyAndBenchmark;
         if (argc == 4) {
@@ -1161,6 +1271,21 @@ int main(int argc, char** argv) {
             }
         }
         return run_func<T>(argv[2], mode);
+    }
+    if ((argc == 6 || argc == 7) && std::strcmp(argv[1], "--profile") == 0) {
+        GemmShape shape{};
+        if (!parse_positive_int_arg(argv[3], shape.M) ||
+            !parse_positive_int_arg(argv[4], shape.N) ||
+            !parse_positive_int_arg(argv[5], shape.K)) {
+            print_usage(argv[0]);
+            return EXIT_FAILURE;
+        }
+        int warmup = 3;
+        if (argc == 7 && !parse_positive_int_arg(argv[6], warmup)) {
+            print_usage(argv[0]);
+            return EXIT_FAILURE;
+        }
+        return run_profile<T>(argv[2], shape, warmup);
     }
     if (argc == 4) {
         GemmShape shape{};
@@ -1176,3 +1301,87 @@ int main(int argc, char** argv) {
     print_usage(argv[0]);
     return EXIT_FAILURE;
 }
+
+/*
+test_gemm_cute execution notes.
+
+Build output:
+  The executable is produced by the CMake target test_gemm_cute. With the
+  commands documented in CMakeLists.txt, typical executable paths are:
+    ./build/test_gemm_cute
+    ./build_one/test_gemm_cute
+
+Common run path:
+  cd gemm
+
+Supported command lines:
+  1. Verify every generated gemm_tn config on all built-in shapes:
+       ./build/test_gemm_cute --verify
+
+  2. Benchmark every generated gemm_tn config on all built-in shapes:
+       ./build/test_gemm_cute --benchmark
+     This also writes BEST.txt next to the executable, for example:
+       ./build/BEST.txt
+
+  3. Verify and benchmark one config on the fixed func shape M=N=K=4096:
+       ./build/test_gemm_cute --func <config>
+
+  4. Verify only one config on the fixed func shape M=N=K=4096:
+       ./build/test_gemm_cute --func <config> --verify
+
+  5. Benchmark only one config on the fixed func shape M=N=K=4096:
+       ./build/test_gemm_cute --func <config> --benchmark
+
+  6. Verify and benchmark every generated config on one custom shape:
+       ./build/test_gemm_cute <M> <N> <K>
+     M, N and K must be positive int values.
+
+Config name arguments:
+  <config> is a generated gemm_tn config name. The "gemm_tn_" prefix is
+  optional, and a trailing "*" is accepted as a prefix pattern if it matches
+  exactly one config.
+
+  Examples:
+    ./build/test_gemm_cute --func bf16_bm128_bn64_bk64_s2_cwg2_wm2_wn4_bsw4
+    ./build/test_gemm_cute --func gemm_tn_bf16_bm128_bn64_bk64_s2_cwg2_wm2_wn4_bsw4
+    ./build/test_gemm_cute --func bf16_bm128_bn64_bk64_s2_cwg2_wm2_wn4_bsw4 --verify
+    ./build/test_gemm_cute --func bf16_bm128_bn64_bk64_s2_cwg2_wm2_wn4_bsw4 --benchmark
+
+Generated config parameter fields:
+  bf16_bm<BM>_bn<BN>_bk<BK>_s<STAGE>_cwg<CWG>_wm<WARPS_M>_wn<WARPS_N>_bsw<BS_W>
+
+  Values are generated by gemm_configs.py and filtered by its legality checks.
+  Current generator inputs are:
+    type=bf16
+    BM={64,128,256}
+    BN={64,128,256}
+    BK={64,128}
+    STAGE={2,3}
+    CWG={2,4}
+    BS_W={4,8}
+    WARPS_M/WARPS_N from legal_warp_shapes(), with WARPS_M*WARPS_N=4*CWG.
+
+Runtime filtering:
+  A config only runs when M % BM == 0, N % BN == 0 and K % BK == 0.
+  Unsupported configs are reported as skipped.
+
+Built-in shapes used by --verify and --benchmark:
+  {128, 4096, 14336}
+  {128, 28672, 4096}
+  {512, 512, 14336}
+  {1024, 1024, 1024}
+  {1024, 1024, 14336}
+  {2048, 2048, 2048}
+  {4096, 4096, 4096}
+  {4096, 4096, 14336}
+  {4096, 28672, 4096}
+  {8192, 8192, 8192}
+  {16384, 16384, 16384}
+  {40960, 40960, 4096}
+
+Benchmark and verification constants:
+  Data type: bf16
+  Warmup iterations: 5
+  Benchmark iterations: 25
+  Verification tolerance: abs=1.0e-2, rel=5.0e-2
+*/

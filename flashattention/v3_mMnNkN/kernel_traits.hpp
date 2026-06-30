@@ -119,7 +119,7 @@ struct Flash_fwd_kernel_traits : public Base {
     constexpr static int kHeadDim = kHeadDim_;
     static_assert(kHeadDim % 32 == 0);
 
-    static_assert(kBlockM % (16 * WARPS_M) == 0 && kBlockN % 16 == 0);
+    static_assert(kBlockM % (16 * WARPS_M) == 0 && kBlockN % (16 * WARPS_N) == 0);
 
     static constexpr auto EU = make_layout(make_shape(Int<WARPS_M>{}, Int<WARPS_N>{}));
     constexpr static int WM = kBlockM / (16 * WARPS_M);

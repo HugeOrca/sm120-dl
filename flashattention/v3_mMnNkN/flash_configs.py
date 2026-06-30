@@ -103,7 +103,7 @@ def is_valid_config(head_dim, block_m, block_n, warps_m, warps_n, stage, max_sme
         return False
     if head_dim % 32 != 0:
         return False
-    if stage > 3:
+    if stage != STAGE:
         return False
     if block_m != warps_m * BLOCK_TILE_UNIT:
         return False

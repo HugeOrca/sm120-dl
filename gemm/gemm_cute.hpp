@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Built on NVIDIA CUTLASS / CuTe (BSD-3-Clause). See gemm/readme.md
+// "Acknowledgements" and gemm/THIRD_PARTY_LICENSES.md for third-party notices.
 #pragma once
 
 #include <algorithm>
@@ -72,13 +75,12 @@ __launch_bounds__((CWG*4+4)*WARP_SIZE, 1)
                   "gemm_cute.hpp uses TMA and must be compiled for a feature-suffixed architecture such as sm_120a.");
 #endif
     static_assert(WARP_SIZE == 32, "WARP_SIZE must be 32.");
-    static_assert(STAGE > 0, "STAGE must be positive.");
+    static_assert(STAGE == 2 || STAGE == 3, "STAGE must be 2 or 3.");
     static_assert(CWG > 0, "CWG must be positive.");
     static_assert(SStorage::STAGE == STAGE, "Kernel STAGE must match SharedStorage stage count.");
     static_assert((BM % 16 == 0) && (BN % 8 == 0) && (BK % 16 == 0),
                   "BM/BN/BK must be compatible with the 16x8x16 MMA atom.");
     static_assert((CWG*4+4)*WARP_SIZE <= 1024, "Thread block size must not exceed 1024 threads.");
-    static_assert(STAGE<=3);
     CUTE_STATIC_ASSERT_V(rank(shape)     == _3{});
     auto [M, N, K]  = shape;
     int M_NUM = M/BM;
@@ -88,6 +90,7 @@ __launch_bounds__((CWG*4+4)*WARP_SIZE, 1)
     constexpr int Consumer = CWG<<2;
     constexpr int kProducerRegCount = 40;
     constexpr int kConsumerRegCount = get_consumer_registers<Consumer, kProducerRegCount>();
+    constexpr bool kUseRegReconfig = (Consumer <= 8);
     constexpr auto cta_tiler = make_shape(Int<BM>{}, Int<BN>{}, Int<BK>{});
 
     extern __shared__ uint8_t smem_array[];
@@ -112,7 +115,7 @@ __launch_bounds__((CWG*4+4)*WARP_SIZE, 1)
     auto read_state  = cutlass::PipelineState<STAGE>();
 
     if(producer<4>()) {
-        cutlass::arch::warpgroup_reg_dealloc<kProducerRegCount>();
+        if constexpr (kUseRegReconfig) cutlass::arch::warpgroup_reg_dealloc<kProducerRegCount>();
         if(threadIdx.y==0 && threadIdx.x==0) {
             int total_k=0;
             for(int tiled_id=blockIdx.x; tiled_id<tiles_num; tiled_id += gridDim.x) {
@@ -142,7 +145,7 @@ __launch_bounds__((CWG*4+4)*WARP_SIZE, 1)
         }
     }
     else {
-        cutlass::arch::warpgroup_reg_alloc<kConsumerRegCount>();
+        if constexpr (kUseRegReconfig) cutlass::arch::warpgroup_reg_alloc<kConsumerRegCount>();
         Copy_Atom<SM75_U32x4_LDSM_N, T> s2r_atom_a;
         Copy_Atom<SM75_U32x2_LDSM_N, T> s2r_atom_b;
         Copy_Atom<SM90_U32x2_STSM_N, T> r2s_atom_c;
@@ -277,7 +280,7 @@ void gemm_tn(
                   "gemm_tn supports only cutlass::bfloat16_t or cutlass::half_t.");
     static_assert(sizeof(T) == 2, "gemm_tn expects a 16-bit element type.");
     static_assert(BM > 0 && BN > 0 && BK > 0, "BM, BN, and BK must be positive.");
-    static_assert(STAGE > 0, "STAGE must be positive.");
+    static_assert(STAGE == 2 || STAGE == 3, "STAGE must be 2 or 3.");
     static_assert(CWG > 0, "CWG must be positive.");
     static_assert(WARPS_M > 0 && WARPS_N > 0, "WARPS_M and WARPS_N must be positive.");
     static_assert(BS_W > 0, "BS_W must be positive.");
@@ -314,7 +317,8 @@ void gemm_tn(
     using mma_atom = MMA_Atom<mma_traits>;
 
     static_assert(WARPS_M*WARPS_N == 4*CWG, "The number of warps must be equal to 4*CWG.");
-    static_assert(BM % WARPS_M == 0 && BN % WARPS_N == 0, "BM and BN must be divisible by WARPS_M and WARPS_N.");
+    static_assert(BM % (16 * WARPS_M) == 0 && BN % (8 * WARPS_N) == 0,
+                  "Every warp partition must contain a ldmatrix-compatible MMA tile.");
     constexpr auto EU = make_layout(make_shape(Int<WARPS_M>{}, Int<WARPS_N>{}));
     // using MMA_Permute = Tile<Int<BM>, Int<BN>, _16>;
     constexpr int WM = BM/(16*WARPS_M);

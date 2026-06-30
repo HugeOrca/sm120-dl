@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Built on NVIDIA CUTLASS / CuTe (BSD-3-Clause). See gemm/readme.md
+# "Acknowledgements" and gemm/THIRD_PARTY_LICENSES.md for third-party notices.
 """Generate conservative gemm_tn configurations as a CMake include file."""
 
 import argparse
@@ -9,9 +12,9 @@ TYPE_CONFIGS = (
     ("bf16", "bf16"),
 )
 
-BM_VALUES = (64, 128) #(, 192)
-BN_VALUES = (64, 128) #(, 192)
-BK_VALUES = (64, )
+BM_VALUES = (64, 128)
+BN_VALUES = (64, 128)
+BK_VALUES = (64, 128)
 STAGE_VALUES = (2, 3)
 CWG_VALUES   = (2, 4)
 BS_W_VALUES  = (4, 8)
@@ -39,8 +42,6 @@ def legal_warp_shapes(bm, bn, cwg):
             continue
         warps_n = total_consumer_warps // warps_m
 
-        # gemm_tn requires these divisibility checks.  The stricter atom checks
-        # keep every warp partition large enough for 16x8x16 MMA atoms.
         if bm % warps_m != 0 or bn % warps_n != 0:
             continue
         if not is_pow2(warps_n) :
@@ -63,7 +64,7 @@ def is_valid_config(bm, bn, bk, stage, cwg, warps_m, warps_n, bs_w, max_smem):
     # Constraints mirrored from gemm_tn and b16_gemm_kernel.
     if bm <= 0 or bn <= 0 or bk <= 0:
         return False
-    if stage <= 0 or cwg <= 0:
+    if stage not in STAGE_VALUES or cwg <= 0:
         return False
     if warps_m <= 0 or warps_n <= 0 or bs_w <= 0:
         return False

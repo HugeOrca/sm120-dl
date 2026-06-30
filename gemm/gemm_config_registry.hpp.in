@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Built on NVIDIA CUTLASS / CuTe (BSD-3-Clause). See gemm/readme.md
+// "Acknowledgements" and gemm/THIRD_PARTY_LICENSES.md for third-party notices.
 #pragma once
 
 #include <cstddef>
