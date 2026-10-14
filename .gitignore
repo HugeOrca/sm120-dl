@@ -1,5 +1,8 @@
 **/build/
 **/build_one/
+**/__pycache__
+**/benchmark.txt
+**/compute_rate_results.txt
 bin/
 lib/
 *.o

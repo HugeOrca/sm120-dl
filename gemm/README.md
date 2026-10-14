@@ -3,6 +3,14 @@
 This directory builds and runs `test_gemm_cute`, a verification and benchmark
 driver for the generated `gemm_tn` CuTe kernels in `gemm_cute.hpp`.
 
+## Requirements
+
+- NVIDIA SM120 GPU and CUDA Toolkit/compiler with `sm_120a` support.
+- CMake `>= 3.24`, a build tool, and C++20/CUDA20 compiler support.
+- `python3` for config generation and CUDA runtime/cuBLAS libraries.
+- CUTLASS/CuTe headers under `3rd/cutlass`; initialize them from the repository
+  root with `git submodule update --init --recursive`.
+
 ## Build
 
 Build commands start from the repository root (each snippet runs `cd gemm`
@@ -10,24 +18,25 @@ first); the run/benchmark commands below are issued from `gemm/`. In the
 snippets, `-j16` runs 16 parallel compile jobs — set it to your CPU core count.
 
 Default full build, instantiating all generated `gemm_tn` configs:
+
 ```bash
 cd gemm
-cmake -S . -B build
-cd build
-make -j16 test_gemm_cute
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target test_gemm_cute -j16
 ```
 
 Build only one generated config:
 
 ```bash
 cd gemm
-cmake -S . -B build_one -DGEMM_TN_ONLY_CONFIG=bf16_bm64_bn128_bk64_s3_cwg2_wm2_wn4_bsw4
+cmake -S . -B build_one -DCMAKE_BUILD_TYPE=Release \
+    -DGEMM_TN_ONLY_CONFIG=bf16_bm64_bn128_bk64_s3_cwg2_wm2_wn4_bsw4
 cmake --build build_one --target test_gemm_cute -j16
 ```
 
-Useful CMake cache parameters:
+Useful CMake cache parameters (append these to the configure command):
 
-```bash
+```text
 -DGEMM_TN_MAX_SMEM_KB=<KiB>
 -DGEMM_TN_ONLY_CONFIG=<config-name>
 ```
@@ -35,9 +44,20 @@ Useful CMake cache parameters:
 The generated files are written under the selected build directory, for example
 `gemm/build/generated` or `gemm/build_one/generated`.
 
+`GEMM_TN_MAX_SMEM_KB` defaults to `100`. `GEMM_TN_ONLY_CONFIG` defaults to an
+empty string (all generated configs); use a full config name without the
+`gemm_tn_` prefix when setting this CMake option.
+
 ## Run
 
-Run commands from `gemm/` after building.
+Run commands from `gemm/` after building. For the one-config build above,
+use `./build_one/test_gemm_cute` and the config selected at configure time:
+
+```bash
+./build_one/test_gemm_cute --func bf16_bm64_bn128_bk64_s3_cwg2_wm2_wn4_bsw4
+```
+
+The examples below use the full build under `build/`.
 
 Verify every generated config on all built-in shapes:
 
@@ -64,18 +84,36 @@ Run one config in verify-only or benchmark-only mode:
 ./build/test_gemm_cute --func bf16_bm128_bn64_bk64_s2_cwg2_wm2_wn4_bsw4 --benchmark
 ```
 
-Verify and benchmark every generated config on a custom shape:
+Verify and benchmark every generated config on a custom shape (for example,
+`M=1024, N=2048, K=4096`):
 
 ```bash
-./build/test_gemm_cute <M> <N> <K>
+./build/test_gemm_cute 1024 2048 4096
 ```
 
-`<config>` accepts generated config names with or without the `gemm_tn_`
-prefix. A trailing `*` is accepted as a prefix pattern if it matches exactly one
-config. Runtime execution skips configs whose `BM`, `BN`, or `BK` do not divide
-the selected `M`, `N`, or `K`.
+Benchmark a custom shape without verification:
+
+```bash
+./build/test_gemm_cute --benchmark 1024 2048 4096
+```
+
+Only `--benchmark` without dimensions writes `BEST.txt` next to the binary;
+custom-shape runs print their results to standard output.
+
+The kernel computes `C = A @ B` with BF16 inputs and output: `A` is row-major
+`[M, K]`, `B` is column-major `[K, N]` (stored as row-major `[N, K]`), and `C`
+is row-major `[M, N]`.
+Dimensions must be positive. Runtime execution skips configs whose `BM`, `BN`,
+or `BK` do not divide the selected `M`, `N`, or `K`.
+
+`--func` and `--profile` accept generated config names with or without the
+`gemm_tn_` prefix. A trailing `*` is accepted as a prefix pattern if it matches
+exactly one config; quote such patterns to prevent shell expansion.
 
 ## Compute Throughput (ncu)
+
+Requires Nsight Compute (`ncu`) on `PATH` and permission to access GPU
+performance counters. Run the commands below from `gemm/`.
 
 `test_gemm_cute --profile <config> <M> <N> <K> [warmup]` runs `warmup` launches,
 then issues exactly one kernel launch inside a `cudaProfilerStart` /
@@ -87,7 +125,6 @@ profile only that kernel (the same pattern as
 `BEST.txt` (best config per shape) with a benchmark run, then profile each entry:
 
 ```bash
-cd gemm
 ./build/test_gemm_cute --benchmark           # writes ./build/BEST.txt
 python3 test_compute_rate.py --binary ./build/test_gemm_cute
 ```
@@ -116,9 +153,9 @@ Run after locking GPU frequency for stable numbers.
 
 End-to-end throughput from `./build/test_gemm_cute --benchmark` (bf16, 5 warmup +
 25 timed iterations), best `gemm_tn` config per shape against `cublasGemmEx`
-(`CUBLAS_GEMM_DEFAULT_TENSOR_OP`). GPU clocks were locked (`nvidia-smi -lgc`), so
-the numbers are stable run-to-run. `gemm_tn/cuBLAS` > 100 % means `gemm_tn` is
-faster.
+(`CUBLAS_GEMM_DEFAULT_TENSOR_OP`). GPU clocks were locked (`nvidia-smi -lgc`)
+for these recorded measurements. Results depend on hardware, software versions,
+and benchmark conditions. `gemm_tn/cuBLAS` > 100 % means `gemm_tn` is faster.
 
 | Shape (M×N×K)       | gemm_tn ms | gemm_tn TFLOP/s | cuBLAS ms | cuBLAS TFLOP/s | gemm_tn/cuBLAS |
 | ---                 | ---:       | ---:            | ---:      | ---:           | ---:           |
@@ -152,11 +189,10 @@ Best config per shape:
 40960x40960x4096    bf16_bm128_bn128_bk64_s2_cwg2_wm2_wn4_bsw8
 ```
 
-`gemm_tn` matches or beats cuBLAS on every shape with enough work to fill the GPU
-(≥ `2048³`), peaking at **+21.6 %** on the thin `128×4096×14336` case and holding
-**+3–5 %** on the large square/long-K shapes. It only trails on tiny,
-launch-bound problems (`1024³`, `512×512×14336`) where cuBLAS's lighter-weight
-kernels win.
+In the measurements above, `gemm_tn` beats cuBLAS on 10 of 12 shapes. Its largest
+gain is **+21.6 %** on `128×4096×14336`; the large square and long-K cases range
+from **+2.3 %** to **+5.6 %**. It trails cuBLAS on `1024³` and
+`512×512×14336`. These timings alone do not establish the cause of those gaps.
 
 ## Acknowledgements
 
